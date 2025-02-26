@@ -1303,3 +1303,8 @@ async def startup_events():
     asyncio.create_task(check_camera_status())
 
 
+# Entry point for Uvicorn
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8080)
