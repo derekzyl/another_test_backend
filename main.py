@@ -44,6 +44,9 @@ from sqlalchemy import (JSON, Boolean, Column, DateTime, Float, ForeignKey,
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import Session, relationship, sessionmaker
 from sqlalchemy.sql import func
+from auth import auth_router
+from models_db import Camera, CameraFamilyMember, Device, FamilyMember, Hub, SessionLocal, User, get_db
+
 
 # Configure Cloudinary
 cloudinary.config(
@@ -75,161 +78,8 @@ logger = logging.getLogger("smart-home-server")
 
 # Initialize FastAPI app
 app = FastAPI(title="Smart Home Server")
+app.include_router(auth_router)
 security = HTTPBasic()
-
-# Database setup
-SQLALCHEMY_DATABASE_URL = "postgresql://cybergenii:QMiHxYQRJQacIY9s8qoUprQVxiAvcs7y@dpg-cuumf5q3esus73aaekhg-a.oregon-postgres.render.com/hub_pq9z"
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-
-# Models
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(String(255), primary_key=True, index=True)
-    username = Column(String(255), unique=True, index=True)
-    password = Column(String(255))  # Would be hashed in production
-    full_name = Column(String(255))
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    # Relationships
-    hubs = relationship("Hub", back_populates="user")
-    cameras = relationship("Camera", back_populates="user")
-    family_members = relationship("FamilyMember", back_populates="user")
-
-    def __init__(self, username, password, full_name):
-        self.id = str(uuid.uuid4())
-        self.username = username
-        self.password = password
-        self.full_name = full_name
-
-
-class Hub(Base):
-    __tablename__ = "hubs"
-
-    id = Column(String(255), primary_key=True, index=True)
-    name = Column(String(255))
-    connected_at = Column(DateTime, default=datetime.utcnow)
-    last_heartbeat = Column(DateTime, default=datetime.utcnow)
-    temperature = Column(Float, nullable=True)
-    humidity = Column(Float, nullable=True)
-    alarm_state = Column(Boolean, default=False)
-    online = Column(Boolean, default=False)
-
-    # Foreign keys
-    user_id = Column(String(255), ForeignKey("users.id"))
-
-    # Relationships
-    user = relationship("User", back_populates="hubs")
-    devices = relationship("Device", back_populates="hub", cascade="all, delete-orphan")
-    cameras = relationship("Camera", back_populates="hub")
-    def __init__(self, id, name, user_id):
-        self.id = id
-        self.name = name
-        self.user_id = user_id
-
-
-class Device(Base):
-    __tablename__ = "devices"
-
-    id = Column(String(255), primary_key=True, index=True)
-    name = Column(String(255))
-    device_type = Column(String(255))
-    status = Column(String(255), default="Unknown")
-    last_updated = Column(DateTime, default=datetime.utcnow)
-
-    # Foreign keys
-    hub_id = Column(String(255), ForeignKey("hubs.id"))
-
-    # Relationships
-    hub = relationship("Hub", back_populates="devices")
-
-    def __init__(self, id, name, device_type, hub_id):
-        self.id = id
-        self.name = name
-        self.device_type = device_type
-        self.hub_id = hub_id
-
-
-# Database Models for Camera Integration
-class Camera(Base):
-    __tablename__ = "cameras"
-
-    id = Column(String(255), primary_key=True, index=True)
-    name = Column(String(255))
-    is_online = Column(Boolean, default=True)
-    last_motion = Column(DateTime, nullable=True)
-    last_image_url = Column(String(512), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    # Foreign keys
-    hub_id = Column(String(255), ForeignKey("hubs.id"))
-    user_id = Column(String(255), ForeignKey("users.id"))
-
-    # Relationships
-    hub = relationship("Hub", back_populates="cameras")
-    user = relationship("User", back_populates="cameras")
-    family_members = relationship("CameraFamilyMember", back_populates="camera")
-
-    def __init__(self, id, name, hub_id, user_id):
-        self.id = id
-        self.name = name
-        self.hub_id = hub_id
-        self.user_id = user_id
-
-
-class FamilyMember(Base):
-    __tablename__ = "family_members"
-
-    id = Column(String(255), primary_key=True, index=True)
-    name = Column(String(255))
-    image_url = Column(String(512))
-    face_encoding = Column(String(4096))  # Store as base64 encoded string
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    # Foreign key
-    user_id = Column(String(255), ForeignKey("users.id"))
-
-    # Relationships
-    user = relationship("User", back_populates="family_members")
-    cameras = relationship("CameraFamilyMember", back_populates="family_member")
-
-    def __init__(self, id, name, image_url, face_encoding, user_id):
-        self.id = id
-        self.name = name
-        self.image_url = image_url
-        self.face_encoding = face_encoding
-        self.user_id = user_id
-
-
-class CameraFamilyMember(Base):
-    __tablename__ = "camera_family_members"
-
-    camera_id = Column(String(255), ForeignKey("cameras.id"), primary_key=True)
-    family_member_id = Column(
-        String(255), ForeignKey("family_members.id"), primary_key=True
-    )
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    # Relationships
-    camera = relationship("Camera", back_populates="family_members")
-    family_member = relationship("FamilyMember", back_populates="cameras")
-
-
-# Create tables
-Base.metadata.create_all(bind=engine)
-
-
-# Database dependency
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
 
 # Initialize with a default user
 def create_default_user():
@@ -280,7 +130,7 @@ def get_current_user(
     return user
 
 
-def authenticate_hub(hub_id: str, username: str, password: str, db: Session) -> bool:
+def authenticate_hub(hub_id: str, username: str, password: str, db: Session) :
     # Check if user exists and password matches
     user = db.query(User).filter(User.username == username).first()
     if not user:
@@ -480,6 +330,60 @@ async def process_hub_message(
         logger.warning(f"ALERT from device {device_id} on hub {hub_id}: {alert_type}")
 
         # In a real system, you might trigger notifications to users here
+    elif msg_type == "camera_added":
+        # Register new camera from hub
+        camera_id = message.get("cameraId")
+        camera_name = message.get("cameraName", f"Camera {camera_id[-6:]}")
+
+        hub = db.query(Hub).filter(Hub.id == hub_id).first()
+        if hub and camera_id:
+            camera = db.query(Camera).filter(Camera.id == camera_id).first()
+            if not camera:
+                camera = Camera(
+                    id=camera_id, name=camera_name, hub_id=hub_id, user_id=hub.user_id
+                )
+                db.add(camera)
+                db.commit()
+                logger.info(f"New camera {camera_id} added to hub {hub_id}")
+
+                # Send confirmation to hub
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "camera_registered",
+                            "cameraId": camera_id,
+                            "success": True,
+                        }
+                    )
+                )
+            else:
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "camera_registered",
+                            "cameraId": camera_id,
+                            "success": False,
+                            "error": "Camera already registered",
+                        }
+                    )
+                )
+
+    elif msg_type == "camera_status":
+        # Update camera status
+        camera_id = message.get("cameraId")
+        is_online = message.get("online", True)
+
+        camera = (
+            db.query(Camera)
+            .filter(Camera.id == camera_id, Camera.hub_id == hub_id)
+            .first()
+        )
+        if camera:
+            camera.is_online = is_online
+            db.commit()
+            logger.info(
+                f"Updated status for camera {camera_id} on hub {hub_id}: {'online' if is_online else 'offline'}"
+            )
 
 
 # API Endpoints - Simplified for user interaction
@@ -607,260 +511,6 @@ async def control_alarm(
             status_code=500, detail="Failed to send alarm command to hub"
         )
 
-
-# Simple dashboard HTML - Updated for user interaction
-@app.get("/", response_class=HTMLResponse)
-async def get_dashboard(current_user: User = Depends(get_current_user)):
-    html_content = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>My Smart Home</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet">
-        <style>
-            body { padding: 20px; }
-            .hub-card { margin-bottom: 20px; }
-            .device-card { margin: 10px 0; }
-            .offline { opacity: 0.5; }
-        </style>
-        <script>
-            // Fetch user's hubs every 5 seconds
-            async function fetchHubs() {
-                try {
-                    const response = await fetch('/api/user/hubs');
-                    if (response.ok) {
-                        const hubs = await response.json();
-                        const hubsContainer = document.getElementById('hubs-container');
-                        hubsContainer.innerHTML = '';
-                        
-                        if (hubs.length === 0) {
-                            hubsContainer.innerHTML = '<div class="alert alert-info">No hubs found. Please connect a hub to your account.</div>';
-                            return;
-                        }
-                        
-                        for (const hub of hubs) {
-                            const hubElement = createHubElement(hub);
-                            hubsContainer.appendChild(hubElement);
-                            
-                            // Fetch devices for this hub
-                            fetchDevices(hub.hub_id);
-                        }
-                    } else {
-                        console.error('Failed to fetch hubs:', response.statusText);
-                    }
-                } catch (error) {
-                    console.error('Error fetching hubs:', error);
-                }
-                
-                // Schedule next update
-                setTimeout(fetchHubs, 5000);
-            }
-            
-            async function fetchDevices(hubId) {
-                try {
-                    const response = await fetch(`/api/user/hubs/${hubId}`);
-                    if (response.ok) {
-                        const hubData = await response.json();
-                        const devicesContainer = document.getElementById(`devices-${hubId}`);
-                        devicesContainer.innerHTML = '';
-                        
-                        if (hubData.devices.length === 0) {
-                            devicesContainer.innerHTML = '<div class="alert alert-info">No devices connected to this hub yet.</div>';
-                            return;
-                        }
-                        
-                        for (const device of hubData.devices) {
-                            const deviceElement = createDeviceElement(hubId, device);
-                            devicesContainer.appendChild(deviceElement);
-                        }
-                    } else {
-                        console.error(`Failed to fetch devices for hub ${hubId}:`, response.statusText);
-                    }
-                } catch (error) {
-                    console.error(`Error fetching devices for hub ${hubId}:`, error);
-                }
-            }
-            
-            function createHubElement(hub) {
-                const hubCard = document.createElement('div');
-                hubCard.className = `card hub-card ${hub.online ? '' : 'offline'}`;
-                
-                const hubBody = document.createElement('div');
-                hubBody.className = 'card-body';
-                
-                const hubTitle = document.createElement('h5');
-                hubTitle.className = 'card-title';
-                hubTitle.textContent = `${hub.name} ${hub.online ? '(Online)' : '(Offline)'}`;
-                
-                const hubDetails = document.createElement('div');
-                hubDetails.innerHTML = `
-                    <p>Temperature: ${hub.temperature !== null ? hub.temperature + '°C' : 'N/A'}</p>
-                    <p>Humidity: ${hub.humidity !== null ? hub.humidity + '%' : 'N/A'}</p>
-                    <p>Alarm: ${hub.alarm_state ? 'ON' : 'OFF'}</p>
-                `;
-                
-                const alarmControls = document.createElement('div');
-                alarmControls.className = 'mb-3';
-                alarmControls.innerHTML = `
-                    <button class="btn btn-success" onclick="controlAlarm('${hub.hub_id}', false)" ${!hub.online ? 'disabled' : ''}>Alarm OFF</button>
-                    <button class="btn btn-danger" onclick="controlAlarm('${hub.hub_id}', true)" ${!hub.online ? 'disabled' : ''}>Alarm ON</button>
-                `;
-                
-                const devicesContainer = document.createElement('div');
-                devicesContainer.id = `devices-${hub.hub_id}`;
-                devicesContainer.className = 'mt-3';
-                
-                hubBody.appendChild(hubTitle);
-                hubBody.appendChild(hubDetails);
-                hubBody.appendChild(alarmControls);
-                hubBody.appendChild(document.createElement('hr'));
-                hubBody.appendChild(document.createElement('h6')).textContent = 'Devices:';
-                hubBody.appendChild(devicesContainer);
-                hubCard.appendChild(hubBody);
-                
-                return hubCard;
-            }
-            
-            function createDeviceElement(hubId, device) {
-                const deviceCard = document.createElement('div');
-                deviceCard.className = 'card device-card';
-                
-                const deviceBody = document.createElement('div');
-                deviceBody.className = 'card-body';
-                
-                const deviceTitle = document.createElement('div');
-                deviceTitle.className = 'd-flex justify-content-between align-items-center';
-                deviceTitle.innerHTML = `
-                    <h6 class="card-title mb-0">${device.name} (${device.type})</h6>
-                    <span class="badge bg-${getStatusColor(device.status)}">${device.status}</span>
-                `;
-                
-                const deviceControls = document.createElement('div');
-                deviceControls.className = 'mt-2';
-                
-                // Add appropriate controls based on device type
-                if (device.type === 'smart_switch' || device.type === 'smart_bulb') {
-                    deviceControls.innerHTML = `
-                        <button class="btn btn-sm btn-success" onclick="controlDevice('${hubId}', '${device.device_id}', 'on')">On</button>
-                        <button class="btn btn-sm btn-danger" onclick="controlDevice('${hubId}', '${device.device_id}', 'off')">Off</button>
-                    `;
-                } else if (device.type === 'window_blind') {
-                    deviceControls.innerHTML = `
-                        <button class="btn btn-sm btn-primary" onclick="controlDevice('${hubId}', '${device.device_id}', 'up')">Up</button>
-                        <button class="btn btn-sm btn-warning" onclick="controlDevice('${hubId}', '${device.device_id}', 'stop')">Stop</button>
-                        <button class="btn btn-sm btn-primary" onclick="controlDevice('${hubId}', '${device.device_id}', 'down')">Down</button>
-                    `;
-                } else if (device.type === 'smoke_sensor') {
-                    deviceControls.innerHTML = `
-                        <button class="btn btn-sm btn-info" onclick="controlDevice('${hubId}', '${device.device_id}', 'get_status')">Refresh</button>
-                    `;
-                } else {
-                    deviceControls.innerHTML = `
-                        <button class="btn btn-sm btn-info" onclick="controlDevice('${hubId}', '${device.device_id}', 'get_status')">Get Status</button>
-                    `;
-                }
-                
-                deviceBody.appendChild(deviceTitle);
-                deviceBody.appendChild(deviceControls);
-                deviceCard.appendChild(deviceBody);
-                
-                return deviceCard;
-            }
-            
-            function getStatusColor(status) {
-                switch (status.toLowerCase()) {
-                    case 'on':
-                        return 'success';
-                    case 'off':
-                        return 'danger';
-                    case 'error':
-                        return 'danger';
-                    case 'unknown':
-                        return 'secondary';
-                    default:
-                        return 'primary';
-                }
-            }
-            
-            async function controlDevice(hubId, deviceId, command) {
-                try {
-                    const response = await fetch(`/api/user/hubs/${hubId}/control/${deviceId}?command=${command}`, {
-                        method: 'POST',
-                    });
-                    
-                    if (response.ok) {
-                        const result = await response.json();
-                        // Simple notification
-                        showNotification(result.message);
-                        // Refresh devices to show the new state
-                        setTimeout(() => fetchDevices(hubId), 1000);
-                    } else {
-                        const errorData = await response.json();
-                        showNotification(`Error: ${errorData.detail}`, true);
-                    }
-                } catch (error) {
-                    console.error('Error controlling device:', error);
-                    showNotification('Error controlling device', true);
-                }
-            }
-            
-            async function controlAlarm(hubId, state) {
-                try {
-                    const response = await fetch(`/api/user/hubs/${hubId}/alarm?state=${state}`, {
-                        method: 'POST',
-                    });
-                    
-                    if (response.ok) {
-                        const result = await response.json();
-                        // Simple notification
-                        showNotification(result.message);
-                        // Refresh hubs to show the new alarm state
-                        setTimeout(fetchHubs, 1000);
-                    } else {
-                        const errorData = await response.json();
-                        showNotification(`Error: ${errorData.detail}`, true);
-                    }
-                } catch (error) {
-                    console.error('Error controlling alarm:', error);
-                    showNotification('Error controlling alarm', true);
-                }
-            }
-            
-            function showNotification(message, isError = false) {
-                const notifContainer = document.getElementById('notification-container');
-                const notif = document.createElement('div');
-                notif.className = `alert alert-${isError ? 'danger' : 'success'} alert-dismissible fade show`;
-                notif.innerHTML = `
-                    ${message}
-                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                `;
-                notifContainer.appendChild(notif);
-                
-                // Auto-dismiss after 3 seconds
-                setTimeout(() => {
-                    notif.classList.remove('show');
-                    setTimeout(() => {
-                        notifContainer.removeChild(notif);
-                    }, 150);
-                }, 3000);
-            }
-            
-            // Start fetching data when page loads
-            document.addEventListener('DOMContentLoaded', fetchHubs);
-        </script>
-    </head>
-    <body>
-        <div class="container">
-            <h1 class="mb-4">My Smart Home</h1>
-            <div id="notification-container" class="position-fixed top-0 end-0 p-3" style="z-index: 1050;"></div>
-            <div id="hubs-container"></div>
-        </div>
-        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
-    </body>
-    </html>
-    """
-    return html_content
 
 
 # Periodic tasks
@@ -1211,7 +861,7 @@ async def check_camera_status():
             for camera in cameras:
                 # Mark camera as offline if no activity for 5 minutes
                 if (
-                    camera.last_motion
+                    camera.last_motion is not None
                     and (current_time - camera.last_motion).total_seconds() > 300
                 ):  # 5 minutes
                     if camera.is_online:  # Only log if status changes
@@ -1302,6 +952,260 @@ async def startup_events():
     asyncio.create_task(update_hub_statuses())
     asyncio.create_task(check_camera_status())
 
+
+# Simple dashboard HTML - Updated for user interaction
+@app.get("/", response_class=HTMLResponse)
+async def get_dashboard(current_user: User = Depends(get_current_user)):
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>My Smart Home</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet">
+        <style>
+            body { padding: 20px; }
+            .hub-card { margin-bottom: 20px; }
+            .device-card { margin: 10px 0; }
+            .offline { opacity: 0.5; }
+        </style>
+        <script>
+            // Fetch user's hubs every 5 seconds
+            async function fetchHubs() {
+                try {
+                    const response = await fetch('/api/user/hubs');
+                    if (response.ok) {
+                        const hubs = await response.json();
+                        const hubsContainer = document.getElementById('hubs-container');
+                        hubsContainer.innerHTML = '';
+                        
+                        if (hubs.length === 0) {
+                            hubsContainer.innerHTML = '<div class="alert alert-info">No hubs found. Please connect a hub to your account.</div>';
+                            return;
+                        }
+                        
+                        for (const hub of hubs) {
+                            const hubElement = createHubElement(hub);
+                            hubsContainer.appendChild(hubElement);
+                            
+                            // Fetch devices for this hub
+                            fetchDevices(hub.hub_id);
+                        }
+                    } else {
+                        console.error('Failed to fetch hubs:', response.statusText);
+                    }
+                } catch (error) {
+                    console.error('Error fetching hubs:', error);
+                }
+                
+                // Schedule next update
+                setTimeout(fetchHubs, 5000);
+            }
+            
+            async function fetchDevices(hubId) {
+                try {
+                    const response = await fetch(`/api/user/hubs/${hubId}`);
+                    if (response.ok) {
+                        const hubData = await response.json();
+                        const devicesContainer = document.getElementById(`devices-${hubId}`);
+                        devicesContainer.innerHTML = '';
+                        
+                        if (hubData.devices.length === 0) {
+                            devicesContainer.innerHTML = '<div class="alert alert-info">No devices connected to this hub yet.</div>';
+                            return;
+                        }
+                        
+                        for (const device of hubData.devices) {
+                            const deviceElement = createDeviceElement(hubId, device);
+                            devicesContainer.appendChild(deviceElement);
+                        }
+                    } else {
+                        console.error(`Failed to fetch devices for hub ${hubId}:`, response.statusText);
+                    }
+                } catch (error) {
+                    console.error(`Error fetching devices for hub ${hubId}:`, error);
+                }
+            }
+            
+            function createHubElement(hub) {
+                const hubCard = document.createElement('div');
+                hubCard.className = `card hub-card ${hub.online ? '' : 'offline'}`;
+                
+                const hubBody = document.createElement('div');
+                hubBody.className = 'card-body';
+                
+                const hubTitle = document.createElement('h5');
+                hubTitle.className = 'card-title';
+                hubTitle.textContent = `${hub.name} ${hub.online ? '(Online)' : '(Offline)'}`;
+                
+                const hubDetails = document.createElement('div');
+                hubDetails.innerHTML = `
+                    <p>Temperature: ${hub.temperature !== null ? hub.temperature + '°C' : 'N/A'}</p>
+                    <p>Humidity: ${hub.humidity !== null ? hub.humidity + '%' : 'N/A'}</p>
+                    <p>Alarm: ${hub.alarm_state ? 'ON' : 'OFF'}</p>
+                `;
+                
+                const alarmControls = document.createElement('div');
+                alarmControls.className = 'mb-3';
+                alarmControls.innerHTML = `
+                    <button class="btn btn-success" onclick="controlAlarm('${hub.hub_id}', false)" ${!hub.online ? 'disabled' : ''}>Alarm OFF</button>
+                    <button class="btn btn-danger" onclick="controlAlarm('${hub.hub_id}', true)" ${!hub.online ? 'disabled' : ''}>Alarm ON</button>
+                `;
+                
+                const devicesContainer = document.createElement('div');
+                devicesContainer.id = `devices-${hub.hub_id}`;
+                devicesContainer.className = 'mt-3';
+                
+                hubBody.appendChild(hubTitle);
+                hubBody.appendChild(hubDetails);
+                hubBody.appendChild(alarmControls);
+                hubBody.appendChild(document.createElement('hr'));
+                hubBody.appendChild(document.createElement('h6')).textContent = 'Devices:';
+                hubBody.appendChild(devicesContainer);
+                hubCard.appendChild(hubBody);
+                
+                return hubCard;
+            }
+            
+            function createDeviceElement(hubId, device) {
+                const deviceCard = document.createElement('div');
+                deviceCard.className = 'card device-card';
+                
+                const deviceBody = document.createElement('div');
+                deviceBody.className = 'card-body';
+                
+                const deviceTitle = document.createElement('div');
+                deviceTitle.className = 'd-flex justify-content-between align-items-center';
+                deviceTitle.innerHTML = `
+                    <h6 class="card-title mb-0">${device.name} (${device.type})</h6>
+                    <span class="badge bg-${getStatusColor(device.status)}">${device.status}</span>
+                `;
+                
+                const deviceControls = document.createElement('div');
+                deviceControls.className = 'mt-2';
+                
+                // Add appropriate controls based on device type
+                if (device.type === 'smart_switch' || device.type === 'smart_bulb') {
+                    deviceControls.innerHTML = `
+                        <button class="btn btn-sm btn-success" onclick="controlDevice('${hubId}', '${device.device_id}', 'on')">On</button>
+                        <button class="btn btn-sm btn-danger" onclick="controlDevice('${hubId}', '${device.device_id}', 'off')">Off</button>
+                    `;
+                } else if (device.type === 'window_blind') {
+                    deviceControls.innerHTML = `
+                        <button class="btn btn-sm btn-primary" onclick="controlDevice('${hubId}', '${device.device_id}', 'up')">Up</button>
+                        <button class="btn btn-sm btn-warning" onclick="controlDevice('${hubId}', '${device.device_id}', 'stop')">Stop</button>
+                        <button class="btn btn-sm btn-primary" onclick="controlDevice('${hubId}', '${device.device_id}', 'down')">Down</button>
+                    `;
+                } else if (device.type === 'smoke_sensor') {
+                    deviceControls.innerHTML = `
+                        <button class="btn btn-sm btn-info" onclick="controlDevice('${hubId}', '${device.device_id}', 'get_status')">Refresh</button>
+                    `;
+                } else {
+                    deviceControls.innerHTML = `
+                        <button class="btn btn-sm btn-info" onclick="controlDevice('${hubId}', '${device.device_id}', 'get_status')">Get Status</button>
+                    `;
+                }
+                
+                deviceBody.appendChild(deviceTitle);
+                deviceBody.appendChild(deviceControls);
+                deviceCard.appendChild(deviceBody);
+                
+                return deviceCard;
+            }
+            
+            function getStatusColor(status) {
+                switch (status.toLowerCase()) {
+                    case 'on':
+                        return 'success';
+                    case 'off':
+                        return 'danger';
+                    case 'error':
+                        return 'danger';
+                    case 'unknown':
+                        return 'secondary';
+                    default:
+                        return 'primary';
+                }
+            }
+            
+            async function controlDevice(hubId, deviceId, command) {
+                try {
+                    const response = await fetch(`/api/user/hubs/${hubId}/control/${deviceId}?command=${command}`, {
+                        method: 'POST',
+                    });
+                    
+                    if (response.ok) {
+                        const result = await response.json();
+                        // Simple notification
+                        showNotification(result.message);
+                        // Refresh devices to show the new state
+                        setTimeout(() => fetchDevices(hubId), 1000);
+                    } else {
+                        const errorData = await response.json();
+                        showNotification(`Error: ${errorData.detail}`, true);
+                    }
+                } catch (error) {
+                    console.error('Error controlling device:', error);
+                    showNotification('Error controlling device', true);
+                }
+            }
+            
+            async function controlAlarm(hubId, state) {
+                try {
+                    const response = await fetch(`/api/user/hubs/${hubId}/alarm?state=${state}`, {
+                        method: 'POST',
+                    });
+                    
+                    if (response.ok) {
+                        const result = await response.json();
+                        // Simple notification
+                        showNotification(result.message);
+                        // Refresh hubs to show the new alarm state
+                        setTimeout(fetchHubs, 1000);
+                    } else {
+                        const errorData = await response.json();
+                        showNotification(`Error: ${errorData.detail}`, true);
+                    }
+                } catch (error) {
+                    console.error('Error controlling alarm:', error);
+                    showNotification('Error controlling alarm', true);
+                }
+            }
+            
+            function showNotification(message, isError = false) {
+                const notifContainer = document.getElementById('notification-container');
+                const notif = document.createElement('div');
+                notif.className = `alert alert-${isError ? 'danger' : 'success'} alert-dismissible fade show`;
+                notif.innerHTML = `
+                    ${message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                `;
+                notifContainer.appendChild(notif);
+                
+                // Auto-dismiss after 3 seconds
+                setTimeout(() => {
+                    notif.classList.remove('show');
+                    setTimeout(() => {
+                        notifContainer.removeChild(notif);
+                    }, 150);
+                }, 3000);
+            }
+            
+            // Start fetching data when page loads
+            document.addEventListener('DOMContentLoaded', fetchHubs);
+        </script>
+    </head>
+    <body>
+        <div class="container">
+            <h1 class="mb-4">My Smart Home</h1>
+            <div id="notification-container" class="position-fixed top-0 end-0 p-3" style="z-index: 1050;"></div>
+            <div id="hubs-container"></div>
+        </div>
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
+    </body>
+    </html>
+    """
+    return html_content
 
 # Entry point for Uvicorn
 if __name__ == "__main__":
